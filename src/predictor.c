@@ -406,14 +406,14 @@ train_perceptron(uint32_t pc, uint8_t outcome) {
   }
   if((abs(y) <= threshold) || (sign(y) != t)){
     if(outcome==TAKEN){
-       if(perceptron_table[(perceptron_size*p_id)]+1 > (threshold+1)){
-         perceptron_table[(perceptron_size*p_id)] = (threshold+1);
+       if(perceptron_table[(perceptron_size*p_id)]+1 > (threshold)){
+         perceptron_table[(perceptron_size*p_id)] = (threshold);
        } else{
          perceptron_table[(perceptron_size*p_id)]++;
        }
     } else {
-      if(perceptron_table[(perceptron_size*p_id)]-1 < ((threshold+1)*-1)){
-         perceptron_table[(perceptron_size*p_id)] = ((threshold+1)*-1);
+      if(perceptron_table[(perceptron_size*p_id)]-1 < ((threshold)*-1)){
+         perceptron_table[(perceptron_size*p_id)] = ((threshold)*-1);
        } else{
          perceptron_table[(perceptron_size*p_id)]--;
        }
