@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "predictor.h"
-
+#include <stdlib.h>
 //
 // TODO:Student Information
 //
@@ -33,6 +33,11 @@ int verbose;
 int tournament_local_pattern_bits = 10;
 int tournament_global_pattern_bits = 12;
 
+//custom predictor: perceptron
+int perceptron_history_len = 25;  
+int perceptron_size; 
+int n_perceptron = 180;
+
 //------------------------------------//
 //      Predictor Data Structures     //
 //------------------------------------//
@@ -49,6 +54,9 @@ uint8_t *bht_global_tournament;
 uint8_t *bht_chooser_tournament;
 uint32_t *table_local_pattern_tournament;
 uint64_t tournament_ghistory;
+//perceptron
+int16_t *perceptron_table;
+uint64_t perceptron_ghistory;
 //------------------------------------//
 //        Predictor Functions         //
 //------------------------------------//
@@ -98,6 +106,18 @@ void init_tournament() {
   tournament_ghistory = 0;
 }
 
+//perceptron functions
+void init_perceptron() {
+  perceptron_size = perceptron_history_len + 1;
+  perceptron_table = (int16_t*)malloc((perceptron_size) * n_perceptron * sizeof(int16_t)); // plus 1 for w_0
+  int i,j;
+  for(i = 0; i<n_perceptron; i++){
+    for(j=0; j<perceptron_size; j++){
+      perceptron_table[(i*(perceptron_size)) + j] = 0;
+    }
+  }
+  perceptron_ghistory = 0;
+}
 
 
 uint8_t 
@@ -192,6 +212,34 @@ tournament_predict(uint32_t pc) {
   return final_result;
 }
 
+uint8_t 
+perceptron_predict(uint32_t pc) {
+  //get lower ghistoryBits of pc
+  uint64_t ghistory_mask = (1 << perceptron_history_len)-1;
+  uint64_t ghistory_lower_bits = perceptron_ghistory & (ghistory_mask);
+  // printf("ghistory lower bits: %ld\n",ghistory_lower_bits);
+  int p_id = pc % n_perceptron;
+  int16_t y = perceptron_table[(perceptron_size*p_id)]*1; // biased input
+  uint64_t temp = ghistory_lower_bits;
+  for(int i=perceptron_history_len; i>=1; i--){
+    int x = (temp%2);
+    if(x==0){ // last bit was zero i.e. not taken
+    // printf("%d\n", perceptron_table[(perceptron_history_len*p_id) + i]);
+      y += (perceptron_table[(perceptron_size*p_id) + i]*-1);
+    }else{ // last bit was one i.e. taken
+      y += (perceptron_table[(perceptron_size*p_id) + i]*1);
+    }
+    temp = (temp >> 1);
+    // printf("temp: %ld\n", temp);
+  }
+  // printf("y: %d\n",y);
+  if(y<0){
+    return NOTTAKEN;
+  }else {
+    return TAKEN;
+  }
+}
+
 void
 train_gshare(uint32_t pc, uint8_t outcome) {
   //get lower ghistoryBits of pc
@@ -221,6 +269,7 @@ train_gshare(uint32_t pc, uint8_t outcome) {
   //Update history register
   ghistory = ((ghistory << 1) | outcome); 
 }
+
 
 void
 train_tournament(uint32_t pc, uint8_t outcome) {
@@ -320,6 +369,120 @@ train_tournament(uint32_t pc, uint8_t outcome) {
   tournament_ghistory = ((tournament_ghistory << 1) | outcome); 
 }
 
+int sign(int64_t y){
+  if(y<0){
+    return -1;
+  } else if(y>0){
+    return 1;
+  } else {
+    return 0;
+  }
+}
+void
+train_perceptron(uint32_t pc, uint8_t outcome) {
+  //get lower ghistoryBits of pc
+  int threshold = (int)((1.93*perceptron_history_len)+14);
+  // printf("threshold: %d\n", threshold);
+  int t;
+  if(outcome == TAKEN){
+    t = 1;
+  }else {
+    t = -1;
+  }
+  //get lower ghistoryBits of pc
+  uint64_t ghistory_mask = (1 << perceptron_history_len)-1;
+  uint64_t ghistory_lower_bits = perceptron_ghistory & (ghistory_mask);
+  int p_id = pc % n_perceptron;
+  int16_t y = perceptron_table[(perceptron_size*p_id)]*1; // biased input
+  uint64_t temp = ghistory_lower_bits;
+  for(int i=perceptron_history_len; i>=1; i--){
+    int x = (temp%2);
+    if(x==0){ // last bit was zero i.e. not taken
+      y += (perceptron_table[(perceptron_size*p_id) + i]*-1);
+    }else{ // last bit was one i.e. taken
+      y += (perceptron_table[(perceptron_size*p_id) + i]*1);
+    }
+    temp = (temp >> 1);
+  }
+  if((abs(y) <= threshold) || (sign(y) != t)){
+    if(outcome==TAKEN){
+       if(perceptron_table[(perceptron_size*p_id)]+1 > (threshold+1)){
+         perceptron_table[(perceptron_size*p_id)] = (threshold+1);
+       } else{
+         perceptron_table[(perceptron_size*p_id)]++;
+       }
+    } else {
+      if(perceptron_table[(perceptron_size*p_id)]-1 < ((threshold+1)*-1)){
+         perceptron_table[(perceptron_size*p_id)] = ((threshold+1)*-1);
+       } else{
+         perceptron_table[(perceptron_size*p_id)]--;
+       }
+    }
+    // printf("perceptron id: %d\n",p_id);
+    // printf("w[0]: %d\n",perceptron_table[(perceptron_size*p_id)]);
+    uint64_t temp = ghistory_lower_bits;
+    for(int i=perceptron_history_len; i>=1; i--){
+      // printf("before: w[%d]: %d\n",i,perceptron_table[(perceptron_size*p_id) + i]);
+      int x = (temp%2);
+      if((outcome==TAKEN && x==TAKEN) || (outcome==NOTTAKEN && x==NOTTAKEN)){
+        if(perceptron_table[(perceptron_size*p_id) + i]+1 > threshold){
+          perceptron_table[(perceptron_size*p_id) + i] = threshold;
+        } else{
+          perceptron_table[(perceptron_size*p_id) + i]++;
+        }
+      }else{ // last bit was one i.e. taken
+        if(perceptron_table[(perceptron_size*p_id) + i]-1 < ((threshold)*-1)){
+          // printf("perceptron_table[(perceptron_size*p_id) + i]-1: %d\n", perceptron_table[(perceptron_size*p_id) + i]-1);
+          // printf("((threshold)*-1): %d\n", ((threshold)*-1));
+          perceptron_table[(perceptron_size*p_id) + i] = (threshold*-1);
+        } else{
+          perceptron_table[(perceptron_size*p_id) + i]--;
+        }  
+      }
+      // printf("after: w[%d]: %d\n",i,perceptron_table[(perceptron_size*p_id) + i]);
+      temp = (temp >> 1);
+    }
+  } 
+  // else {
+  //   if(y<0 && (outcome==TAKEN)){
+  //     uint64_t temp = ghistory_lower_bits;
+  //     for(int i=perceptron_history_len-1; i>=0; i--){
+  //       int x = (temp%2);
+  //       if(x==outcome){
+  //         perceptron_table[(perceptron_history_len*p_id) + i] +=1;  
+  //       }else{ // last bit was one i.e. taken
+  //         perceptron_table[(perceptron_history_len*p_id) + i] -=1;  
+  //       }
+  //       temp = (temp >> 1);
+  //     }
+  //   }else if(y>0 && (outcome==NOTTAKEN)){
+  //     uint64_t temp = ghistory_lower_bits;
+  //     for(int i=perceptron_history_len-1; i>=0; i--){
+  //       int x = (temp%2);
+  //       if(x==outcome){
+  //         perceptron_table[(perceptron_history_len*p_id) + i] +=1;  
+  //       }else{ // last bit was one i.e. taken
+  //         perceptron_table[(perceptron_history_len*p_id) + i] -=1;  
+  //       }
+  //       temp = (temp >> 1);
+  //     }
+  //   } else if(y==0){
+  //     uint64_t temp = ghistory_lower_bits;
+  //     for(int i=perceptron_history_len-1; i>=0; i--){
+  //       int x = (temp%2);
+  //       if(x==outcome){
+  //         perceptron_table[(perceptron_history_len*p_id) + i] +=1;  
+  //       }else{ // last bit was one i.e. taken
+  //         perceptron_table[(perceptron_history_len*p_id) + i] -=1;  
+  //       }
+  //       temp = (temp >> 1);
+  //     }
+  //   }
+  // }
+  //Update history register
+  perceptron_ghistory = ((perceptron_ghistory << 1) | outcome); 
+}
+
 void
 cleanup_gshare() {
   free(bht_gshare);
@@ -339,7 +502,7 @@ init_predictor()
       init_tournament();
       break;
     case CUSTOM:
-      init_tournament();
+      init_perceptron();
       break;
     default:
       break;
@@ -364,7 +527,7 @@ make_prediction(uint32_t pc)
     case TOURNAMENT:
       return tournament_predict(pc);
     case CUSTOM:
-      return tournament_predict(pc);
+      return perceptron_predict(pc);
     default:
       break;
   }
@@ -389,7 +552,7 @@ train_predictor(uint32_t pc, uint8_t outcome)
     case TOURNAMENT:
       return train_tournament(pc, outcome);
     case CUSTOM:
-      return train_tournament(pc, outcome);
+      return train_perceptron(pc, outcome);
     default:
       break;
   }
