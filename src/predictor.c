@@ -36,9 +36,9 @@ int tournament_global_pattern_bits = 12;
 //custom predictor: perceptron
 int local_history_len = 10;
 
-int perceptron_history_len = 21;  
+int perceptron_history_len = 25;  
 int perceptron_size; 
-int n_perceptron = 119;
+int n_perceptron = 101;
 
 
 //------------------------------------//
@@ -123,7 +123,11 @@ void init_perceptron() {
   int i,j;
   for(i = 0; i<n_perceptron; i++){
     for(j=0; j<perceptron_size; j++){
-      perceptron_table[(i*(perceptron_size)) + j] = 0;
+      if(j == 0){
+        perceptron_table[(i*(perceptron_size)) + j] = -1;  
+      } else {
+        perceptron_table[(i*(perceptron_size)) + j] = 0;
+      }
     }
   }
   perceptron_ghistory = 0;
@@ -261,12 +265,13 @@ perceptron_predict(uint32_t pc) {
     // printf("temp: %ld\n", temp);
   }
   // printf("y: %d\n",y);
+  // printf("y: %d\n", y);
   if(y<0){
     perceptron_result =  NOTTAKEN;
   }else {
     perceptron_result =  TAKEN;
   }
-
+  // printf("perceptron_result: %d\n", perceptron_result);
   int local_result;
   uint32_t local_pattern_table_entries = 1 << local_history_len;
   uint32_t pc_lower_bits = pc & (local_pattern_table_entries-1);
@@ -288,6 +293,8 @@ perceptron_predict(uint32_t pc) {
       printf("Warning: Undefined state of entry in TOURNAMENT BHT --- PREDICTION!\n");
       local_result = NOTTAKEN;
   }
+  // printf("local_result: %d\n", local_result);
+
   uint8_t final_result;
   uint32_t n = 1 << local_history_len;
   uint32_t pc_lbits = pc & (n-1);
@@ -311,6 +318,8 @@ perceptron_predict(uint32_t pc) {
       printf("Warning: Undefined state of entry in TOURNAMENT BHT --- PREDICTION!\n");
       final_result = NOTTAKEN;
   }
+  // printf("final_result: %d\n", final_result);
+
   return final_result;
 }
 
@@ -454,6 +463,7 @@ int sign(int64_t y){
 }
 void
 train_perceptron(uint32_t pc, uint8_t outcome) {
+  // printf("outcome: %d\n",outcome);
   //get lower ghistoryBits of pc
   int perceptron_result;
   int threshold = (int)((1.93*perceptron_history_len)+14);
@@ -554,7 +564,7 @@ train_perceptron(uint32_t pc, uint8_t outcome) {
   uint32_t pc_lbits = pc & (n-1);
   uint32_t ghistory_lbits = perceptron_ghistory & (n -1);
   // uint32_t index = pc_lbits ^ ghistory_lbits;
-  uint32_t index = pc_lbits;
+  uint32_t index = pc_lbits;  
 
   if(perceptron_result != local_result){
     if(local_result == outcome){
