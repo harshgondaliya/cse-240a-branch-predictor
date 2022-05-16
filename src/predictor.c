@@ -34,9 +34,12 @@ int tournament_local_pattern_bits = 10;
 int tournament_global_pattern_bits = 12;
 
 //custom predictor: perceptron
+int local_history_len = 10;
+
 int perceptron_history_len = 25;  
 int perceptron_size; 
-int n_perceptron = 180;
+int n_perceptron = 101;
+
 
 //------------------------------------//
 //      Predictor Data Structures     //
@@ -57,6 +60,13 @@ uint64_t tournament_ghistory;
 //perceptron
 int16_t *perceptron_table;
 uint64_t perceptron_ghistory;
+
+uint32_t *table_local_pattern_hybrid;
+uint8_t *bht_local_hybrid;
+
+uint8_t *bht_chooser_hybrid;
+
+
 //------------------------------------//
 //        Predictor Functions         //
 //------------------------------------//
@@ -117,6 +127,23 @@ void init_perceptron() {
     }
   }
   perceptron_ghistory = 0;
+
+  int local_pattern_entries = 1 << local_history_len;
+  int local_bht_entries = 1 << local_history_len;
+  int chooser_entries = 1 << local_history_len;
+
+  table_local_pattern_hybrid = (uint32_t*)malloc(local_pattern_entries * sizeof(uint32_t));
+  bht_local_hybrid = (uint8_t*)malloc(local_bht_entries * sizeof(uint8_t));
+  bht_chooser_hybrid = (uint8_t*)malloc(chooser_entries * sizeof(uint8_t));
+  for(i = 0; i< local_pattern_entries; i++){
+    table_local_pattern_hybrid[i] = 0;
+  }
+  for(i = 0; i< local_bht_entries; i++){
+    bht_local_hybrid[i] = WN;
+  }
+  for(i = 0; i< local_bht_entries; i++){
+    bht_chooser_hybrid[i] = WN; // not taken is local; taken is global
+  }  
 }
 
 
@@ -215,6 +242,7 @@ tournament_predict(uint32_t pc) {
 uint8_t 
 perceptron_predict(uint32_t pc) {
   //get lower ghistoryBits of pc
+  int perceptron_result;
   uint64_t ghistory_mask = (1 << perceptron_history_len)-1;
   uint64_t ghistory_lower_bits = perceptron_ghistory & (ghistory_mask);
   // printf("ghistory lower bits: %ld\n",ghistory_lower_bits);
@@ -234,10 +262,56 @@ perceptron_predict(uint32_t pc) {
   }
   // printf("y: %d\n",y);
   if(y<0){
-    return NOTTAKEN;
+    perceptron_result =  NOTTAKEN;
   }else {
-    return TAKEN;
+    perceptron_result =  TAKEN;
   }
+
+  int local_result;
+  uint32_t local_pattern_table_entries = 1 << local_history_len;
+  uint32_t pc_lower_bits = pc & (local_pattern_table_entries-1);
+  uint32_t local_bht_index = (table_local_pattern_hybrid[pc_lower_bits])&(local_pattern_table_entries-1);
+  switch(bht_local_hybrid[local_bht_index]){
+    case WN:
+      local_result = NOTTAKEN;
+      break;
+    case SN:
+      local_result = NOTTAKEN;
+      break;
+    case WT:
+      local_result = TAKEN;
+      break;
+    case ST:
+      local_result = TAKEN;
+      break;
+    default:
+      printf("Warning: Undefined state of entry in TOURNAMENT BHT --- PREDICTION!\n");
+      local_result = NOTTAKEN;
+  }
+  uint8_t final_result;
+  uint32_t n = 1 << local_history_len;
+  uint32_t pc_lbits = pc & (n-1);
+  uint32_t ghistory_lbits = perceptron_ghistory & (n -1);
+  // uint32_t index = pc_lbits ^ ghistory_lbits;
+  uint32_t index = pc_lbits;
+  switch(bht_chooser_hybrid[index]){
+    case WN:
+      final_result = local_result;
+      break;
+    case SN:
+      final_result = local_result;
+      break;
+    case WT:
+      final_result = perceptron_result;
+      break;
+    case ST:
+      final_result = perceptron_result;
+      break;
+    default:
+      printf("Warning: Undefined state of entry in TOURNAMENT BHT --- PREDICTION!\n");
+      final_result = NOTTAKEN;
+  }
+  return final_result;
 }
 
 void
@@ -381,6 +455,7 @@ int sign(int64_t y){
 void
 train_perceptron(uint32_t pc, uint8_t outcome) {
   //get lower ghistoryBits of pc
+  int perceptron_result;
   int threshold = (int)((1.93*perceptron_history_len)+14);
   // printf("threshold: %d\n", threshold);
   int t;
@@ -403,6 +478,11 @@ train_perceptron(uint32_t pc, uint8_t outcome) {
       y += (perceptron_table[(perceptron_size*p_id) + i]*1);
     }
     temp = (temp >> 1);
+  }
+  if(y<0){
+    perceptron_result =  NOTTAKEN;
+  }else {
+    perceptron_result = TAKEN;
   }
   if((abs(y) <= threshold) || (sign(y) != t)){
     if(outcome==TAKEN){
@@ -443,42 +523,77 @@ train_perceptron(uint32_t pc, uint8_t outcome) {
       temp = (temp >> 1);
     }
   } 
-  // else {
-  //   if(y<0 && (outcome==TAKEN)){
-  //     uint64_t temp = ghistory_lower_bits;
-  //     for(int i=perceptron_history_len-1; i>=0; i--){
-  //       int x = (temp%2);
-  //       if(x==outcome){
-  //         perceptron_table[(perceptron_history_len*p_id) + i] +=1;  
-  //       }else{ // last bit was one i.e. taken
-  //         perceptron_table[(perceptron_history_len*p_id) + i] -=1;  
-  //       }
-  //       temp = (temp >> 1);
-  //     }
-  //   }else if(y>0 && (outcome==NOTTAKEN)){
-  //     uint64_t temp = ghistory_lower_bits;
-  //     for(int i=perceptron_history_len-1; i>=0; i--){
-  //       int x = (temp%2);
-  //       if(x==outcome){
-  //         perceptron_table[(perceptron_history_len*p_id) + i] +=1;  
-  //       }else{ // last bit was one i.e. taken
-  //         perceptron_table[(perceptron_history_len*p_id) + i] -=1;  
-  //       }
-  //       temp = (temp >> 1);
-  //     }
-  //   } else if(y==0){
-  //     uint64_t temp = ghistory_lower_bits;
-  //     for(int i=perceptron_history_len-1; i>=0; i--){
-  //       int x = (temp%2);
-  //       if(x==outcome){
-  //         perceptron_table[(perceptron_history_len*p_id) + i] +=1;  
-  //       }else{ // last bit was one i.e. taken
-  //         perceptron_table[(perceptron_history_len*p_id) + i] -=1;  
-  //       }
-  //       temp = (temp >> 1);
-  //     }
-  //   }
-  // }
+
+  int local_result;
+  uint32_t local_pattern_table_entries = 1 << local_history_len;
+  uint32_t pc_lower_bits = pc & (local_pattern_table_entries-1);
+  uint32_t local_bht_index = (table_local_pattern_hybrid[pc_lower_bits])&(local_pattern_table_entries-1);
+  table_local_pattern_hybrid[pc_lower_bits] = ((table_local_pattern_hybrid[pc_lower_bits] << 1) | outcome); 
+  switch(bht_local_hybrid[local_bht_index]){
+    case WN:
+      local_result = NOTTAKEN;
+      bht_local_hybrid[local_bht_index] = (outcome==TAKEN)?WT:SN;
+      break;
+    case SN:
+      local_result = NOTTAKEN;
+      bht_local_hybrid[local_bht_index] = (outcome==TAKEN)?WN:SN;
+      break;
+    case WT:
+      local_result = TAKEN;
+      bht_local_hybrid[local_bht_index] = (outcome==TAKEN)?ST:WN;
+      break;
+    case ST:
+      local_result = TAKEN;
+      bht_local_hybrid[local_bht_index] = (outcome==TAKEN)?ST:WT;
+      break;
+    default:
+      printf("Warning: Undefined state of entry in TOURNAMENT BHT --- TRAINING!\n");
+      local_result = NOTTAKEN;
+  }
+  uint32_t n = 1 << local_history_len;
+  uint32_t pc_lbits = pc & (n-1);
+  uint32_t ghistory_lbits = perceptron_ghistory & (n -1);
+  // uint32_t index = pc_lbits ^ ghistory_lbits;
+  uint32_t index = pc_lbits;
+
+  if(perceptron_result != local_result){
+    if(local_result == outcome){
+      switch(bht_chooser_hybrid[index]){
+        case WN:
+          bht_chooser_hybrid[index]=SN;
+          break;
+        case SN:
+          bht_chooser_hybrid[index]=SN;
+          break;
+        case WT:
+          bht_chooser_hybrid[index]=WN;
+          break;
+        case ST:
+          bht_chooser_hybrid[index]=WT;
+          break;
+        default:
+          printf("Warning: Undefined state of entry in TOURNAMENT BHT --- TRAINING!\n");
+      }
+    }
+    if(perceptron_result == outcome){
+      switch(bht_chooser_hybrid[index]){
+        case WN:
+          bht_chooser_hybrid[index]=WT;
+          break;
+        case SN:
+          bht_chooser_hybrid[index]=WN;
+          break;
+        case WT:
+          bht_chooser_hybrid[index]=ST;
+          break;
+        case ST:
+          bht_chooser_hybrid[index]=ST;
+          break;
+        default:
+          printf("Warning: Undefined state of entry in TOURNAMENT BHT --- TRAINING!\n");
+      }
+    }
+  }  
   //Update history register
   perceptron_ghistory = ((perceptron_ghistory << 1) | outcome); 
 }
