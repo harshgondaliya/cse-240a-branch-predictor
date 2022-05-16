@@ -36,9 +36,9 @@ int tournament_global_pattern_bits = 12;
 //custom predictor: perceptron
 int local_history_len = 10;
 
-int perceptron_history_len = 25;  
+int perceptron_history_len = 21;  
 int perceptron_size; 
-int n_perceptron = 101;
+int n_perceptron = 119;
 
 
 //------------------------------------//
